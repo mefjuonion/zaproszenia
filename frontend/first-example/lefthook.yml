@@ -1,0 +1,14 @@
+pre-commit:
+  jobs:
+    - name: __NAME__-eslint
+      root: src/__NAME__/
+      glob: "*.{js,jsx,mjs,cjs,ts,tsx}"
+      run: npx --no-install eslint --max-warnings=0 {staged_files}
+
+    # Whole-project type check catches cross-file breakage (removed export, deleted file).
+    # No `glob`: lefthook drops deleted files from its lists, so filter with git diff instead.
+    - name: __NAME__-typecheck
+      root: src/__NAME__/
+      run: |
+        git diff --cached --name-only --relative -- . | grep -qE '\.(js|jsx|mjs|cjs|ts|tsx)$' || exit 0
+        npx --no-install tsc --noEmit
