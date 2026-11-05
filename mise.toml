@@ -1,0 +1,36 @@
+# Each src/<name>/mise.toml declares that component's own tools (node, python, ...).
+# Install everything with: mise install --monorepo
+monorepo_root = true
+
+[monorepo]
+config_roots = ["src/*"]
+
+[env]
+# Lets plain `docker compose ...` work from the repo root.
+COMPOSE_FILE = "{{config_root}}/.config/docker-compose.yml"
+COMPOSE_PROJECT_NAME = "{{config_root | basename}}"
+# Where `mise run add-setup` takes components from (branch TEMPLATE_REF, default "templates").
+TEMPLATE_REPO = "{{ get_env(name='TEMPLATE_REPO', default='https://github.com/mateusz-cybulski/base-web.git') }}"
+
+[tools]
+# Repo-wide tools only.
+terraform = "1.16.6"
+lefthook = "2.2.2"
+# Checklist in `mise run agents`.
+gum = "2.0.2"
+
+[tasks.dev]
+description = "Run all services from .config/docker-compose.yml locally with hot reload"
+run = "docker compose up --build"
+
+[tasks.agents]
+description = "Pick Claude skills/agents from the agents branch; the stack is detected or given, e.g. `mise run agents nextjs tailwind` (--yes: no picker, --list: show stacks)"
+run = ".config/scripts/sync-agents.sh"
+# The checklist needs the terminal.
+raw = true
+
+[tasks.add-setup]
+description = "Creates service from the template, e.g. `mise run add-setup frontend/next` (as src/frontend) or `mise run add-setup api/fastapi worker`"
+run = ".config/scripts/add-setup.sh"
+# Ends with the skills checklist from `mise run agents`.
+raw = true

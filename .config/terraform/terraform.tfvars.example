@@ -1,0 +1,6 @@
+GITHUB_REPO_NAME          = ""
+GCP_BILLING_ACCOUNT_ID    = ""
+GCP_ORG_ID                = ""
+GCP_DNS_PROJECT_ID        = ""
+GCP_DNS_MANAGED_ZONE_NAME = ""
+DNS_BASE_DOMAIN           = ""

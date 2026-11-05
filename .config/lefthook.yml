@@ -1,0 +1,15 @@
+# Use rules for particular frameworks
+extends:
+  - src/*/lefthook.yml
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: terraform-fmt
+      glob: [".config/terraform/*.tf", ".config/terraform/**/*.tf"]
+      run: terraform fmt -check -recursive .config/terraform
+
+    - name: terraform-validate
+      root: .config/terraform/
+      glob: "*.{tf,hcl}"
+      run: terraform init -backend=false -input=false >/dev/null && terraform validate -no-color

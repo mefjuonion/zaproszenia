@@ -1,0 +1,116 @@
+name: Infrastructure
+
+# Pull requests: check and plan, never modify anything.
+# Push to main: create or update everything (GCP project, images, Cloud Run, domains).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - ".config/terraform/**"
+      - "src/*/Dockerfile"
+      - "src/*/service.json"
+      - "mise.toml"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    if: ${{ !github.event.repository.is_template }}
+    runs-on: ubuntu-latest
+    outputs:
+      project_id: ${{ steps.report.outputs.project_id }}
+      project_number: ${{ steps.report.outputs.project_number }}
+      service_urls: ${{ steps.report.outputs.service_urls }}
+    defaults:
+      run:
+        working-directory: .config/terraform
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      # Terraform state location (backend config, not a Terraform variable).
+      STATE_BUCKET: ${{ secrets.GCP_TF_STATE_BUCKET }}
+      STATE_PREFIX: apps/${{ github.event.repository.name }}
+      # Terraform variables (see variables.tf). Unset optional secrets arrive as "",
+      # which Terraform treats as not set.
+      TF_VAR_GITHUB_REPO_NAME: ${{ github.event.repository.name }}
+      TF_VAR_IMAGE_TAG: ${{ github.sha }}
+      TF_VAR_GCP_BILLING_ACCOUNT_ID: ${{ secrets.GCP_BILLING_ACCOUNT_ID }}
+      TF_VAR_GCP_DNS_MANAGED_ZONE_NAME: ${{ secrets.GCP_DNS_MANAGED_ZONE_NAME }}
+      TF_VAR_GCP_DNS_PROJECT_ID: ${{ secrets.GCP_DNS_PROJECT_ID }}
+      TF_VAR_GCP_ORG_ID: ${{ secrets.GCP_ORG_ID }}
+      TF_VAR_GCP_FOLDER_ID: ${{ secrets.GCP_FOLDER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Read Terraform version from mise.toml
+        id: versions
+        working-directory: .
+        run: echo "terraform=$(sed -n 's/^terraform *= *"\(.*\)"/\1/p' mise.toml)" >> "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ steps.versions.outputs.terraform }}
+          terraform_wrapper: false
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+      - name: Initialize
+        run: |
+          [[ -n "$STATE_BUCKET" ]] || { echo "::error::Secret GCP_TF_STATE_BUCKET is not set"; exit 1; }
+          terraform init -backend-config="bucket=$STATE_BUCKET" -backend-config="prefix=$STATE_PREFIX"
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Plan
+        if: github.event_name == 'pull_request'
+        run: terraform plan
+
+      - name: Deploy
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          # The project ID must be known before the main plan (google provider bug with
+          # google_cloud_run_domain_mapping.metadata.namespace), so create its random suffix first.
+          terraform apply -auto-approve -target=random_string.project_suffix
+          terraform apply -auto-approve
+
+      - name: Report
+        id: report
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          project_id="$(terraform output -raw project_id)"
+          service_urls="$(terraform output -json service_urls)"
+
+          # Outputs for later jobs.
+          {
+            echo "project_id=$project_id"
+            echo "project_number=$(terraform output -raw project_number)"
+            echo "service_urls=$(jq -c . <<<"$service_urls")"
+          } >> "$GITHUB_OUTPUT"
+
+          # Summary on the workflow run page.
+          {
+            echo "### Infrastructure"
+            echo "Project: \`$project_id\`"
+            echo
+            echo "| Service | URL |"
+            echo "|---|---|"
+            jq -r 'to_entries[] | "| \(.key) | \(.value) |"' <<<"$service_urls"
+          } >> "$GITHUB_STEP_SUMMARY"
